@@ -562,6 +562,10 @@ void LocalizationStage::ImportPath(Path &imported_path, Buffer &waypoint_buffer,
     // Get the latest imported waypoint. and find its closest waypoint in TM's InMemoryMap.
     cg::Location latest_imported = imported_path.front();
     SimpleWaypointPtr imported = local_map->GetWaypoint(latest_imported);
+    // Waypoints followed towards the current path point, and the buffer size when it became the target: a point not
+    // reached within MAX_IMPORT_STEPS_PER_POINT is dropped, with the waypoints added while looking for it.
+    uint64_t steps_towards_point = 0u;
+    uint64_t buffer_size_at_point = waypoint_buffer.size();
 
     // We need to generate a path compatible with TM's waypoints.
     while (!imported_path.empty() && waypoint_buffer.back()->DistanceSquared(waypoint_buffer.front()) <= horizon_square) {
@@ -578,13 +582,18 @@ void LocalizationStage::ImportPath(Path &imported_path, Buffer &waypoint_buffer,
         float min_distance = std::numeric_limits<float>::infinity();
         for (uint64_t k = 0u; k < next_waypoints.size(); ++k) {
           SimpleWaypointPtr junction_end_point = next_waypoints.at(k);
-          while (!junction_end_point->CheckJunction()) {
+          // Walk to the road past the junction (bounded, and stopping at a dead end).
+          uint64_t walk_steps = 0u;
+          while (!junction_end_point->CheckJunction() && !junction_end_point->GetNextWaypoint().empty()
+                 && walk_steps++ < MAX_JUNCTION_WALK_STEPS) {
             junction_end_point = junction_end_point->GetNextWaypoint().front();
           }
-          while (junction_end_point->CheckJunction()) {
+          while (junction_end_point->CheckJunction() && !junction_end_point->GetNextWaypoint().empty()
+                 && walk_steps++ < MAX_JUNCTION_WALK_STEPS) {
             junction_end_point = junction_end_point->GetNextWaypoint().front();
           }
-          while (next_waypoints.at(k)->DistanceSquared(junction_end_point) < 50.0f) {
+          while (next_waypoints.at(k)->DistanceSquared(junction_end_point) < 50.0f
+                 && !junction_end_point->GetNextWaypoint().empty() && walk_steps++ < MAX_JUNCTION_WALK_STEPS) {
             junction_end_point = junction_end_point->GetNextWaypoint().front();
           }
           float jep_road_id = junction_end_point->GetWaypoint()->GetRoadId();
@@ -616,10 +625,28 @@ void LocalizationStage::ImportPath(Path &imported_path, Buffer &waypoint_buffer,
           PushWaypoint(actor_id, track_traffic, waypoint_buffer, next_wp_selection);
         }
         PushWaypoint(actor_id, track_traffic, waypoint_buffer, imported);
-        latest_imported = imported_path.front();
-        imported = local_map->GetWaypoint(latest_imported);
+        if (!imported_path.empty()) {
+          latest_imported = imported_path.front();
+          imported = local_map->GetWaypoint(latest_imported);
+        }
+        steps_towards_point = 0u;
+        buffer_size_at_point = waypoint_buffer.size();
       } else {
         PushWaypoint(actor_id, track_traffic, waypoint_buffer, next_wp_selection);
+        if (++steps_towards_point > MAX_IMPORT_STEPS_PER_POINT) {
+          // The path point cannot be reached from here by the branch choice above (e.g. a ring of short roads between
+          // clustered junctions inside the horizon): drop it, and the waypoints added while looking for it.
+          while (waypoint_buffer.size() > buffer_size_at_point && waypoint_buffer.size() > 1u) {
+            PopWaypoint(actor_id, track_traffic, waypoint_buffer, false);
+          }
+          imported_path.erase(imported_path.begin());
+          if (!imported_path.empty()) {
+            latest_imported = imported_path.front();
+            imported = local_map->GetWaypoint(latest_imported);
+          }
+          steps_towards_point = 0u;
+          buffer_size_at_point = waypoint_buffer.size();
+        }
       }
     }
     if (imported_path.empty()) {

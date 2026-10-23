@@ -48,6 +48,11 @@ static const float MAX_START_DISTANCE = 20.0f;
 static const float MINIMUM_HORIZON_LENGTH = 15.0f;
 static const float HORIZON_RATE = 2.0f;
 static const float HIGH_SPEED_HORIZON_RATE = 4.0f;
+// ImportPath: waypoints followed towards one path point in one update before that point counts as unreachable (a
+// full horizon holds ~30; a ring of short roads inside the horizon otherwise grows the buffer without end)
+static const uint64_t MAX_IMPORT_STEPS_PER_POINT = 500u;
+// ImportPath: waypoints walked to find the road past a junction when choosing a branch
+static const uint64_t MAX_JUNCTION_WALK_STEPS = 500u;
 } // namespace PathBufferUpdate
 
 namespace WaypointSelection {
